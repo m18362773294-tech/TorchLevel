@@ -1,32 +1,91 @@
-name: Build Debug APK
+package com.example.torchlevel
 
-on:
-  workflow_dispatch:
-  push:
-    branches: [ "main" ]
+import android.content.Context
+import android.hardware.camera2.CameraCharacteristics
+import android.hardware.camera2.CameraManager
+import android.os.Bundle
+import android.widget.Button
+import android.widget.SeekBar
+import android.widget.TextView
+import androidx.appcompat.app.AppCompatActivity
 
-jobs:
-  build:
-    runs-on: ubuntu-latest
+class MainActivity : AppCompatActivity() {
 
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+    private lateinit var cameraManager: CameraManager
+    private var cameraId: String? = null
+    private var maxLevel = 1
+    private var torchOn = false
 
-      - name: Set up JDK 17
-        uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: 17
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        setContentView(R.layout.activity_main)
 
-      - name: Make gradlew executable
-        run: chmod +x ./gradlew
+        val btnToggle = findViewById<Button>(R.id.btnToggle)
+        val seekLevel = findViewById<SeekBar>(R.id.seekLevel)
+        val tvLevel = findViewById<TextView>(R.id.tvLevel)
+        val tvStatus = findViewById<TextView>(R.id.tvStatus)
 
-      - name: Build Debug APK
-        run: ./gradlew :app:assembleDebug
+        cameraManager = getSystemService(Context.CAMERA_SERVICE) as CameraManager
+        cameraId = cameraManager.cameraIdList.firstOrNull()
 
-      - name: Upload APK artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: app-debug-apk
-          path: app/build/outputs/apk/debug/app-debug.apk
+        if (cameraId == null) {
+            tvStatus.text = "未找到相机"
+            btnToggle.isEnabled = false
+            return
+        }
+
+        val characteristics = cameraManager.getCameraCharacteristics(cameraId!!)
+        val available = characteristics.get(CameraCharacteristics.FLASH_INFO_AVAILABLE) == true
+
+        if (!available) {
+            tvStatus.text = "本机不支持手电筒"
+            btnToggle.isEnabled = false
+            return
+        }
+
+        val max = characteristics.get(CameraCharacteristics.FLASH_INFO_STRENGTH_MAXIMUM_LEVEL)
+        if (max != null && max > 1) {
+            maxLevel = max
+            seekLevel.max = maxLevel
+            seekLevel.isEnabled = true
+            tvStatus.text = "支持档位调节"
+        } else {
+            maxLevel = 1
+            seekLevel.isEnabled = false
+            tvStatus.text = "仅支持开 / 关"
+        }
+
+        tvLevel.text = "档位：1 / $maxLevel"
+        seekLevel.progress = 1
+
+        btnToggle.setOnClickListener {
+            torchOn = !torchOn
+            if (torchOn) {
+                setTorch(seekLevel.progress)
+                btnToggle.text = "关"
+            } else {
+                cameraManager.setTorchMode(cameraId!!, false)
+                btnToggle.text = "开"
+            }
+        }
+
+        seekLevel.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+            override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
+                val level = if (progress < 1) 1 else progress
+                tvLevel.text = "档位：$level / $maxLevel"
+                if (torchOn) setTorch(level)
+            }
+
+            override fun onStartTrackingTouch(seekBar: SeekBar?) {}
+            override fun onStopTrackingTouch(seekBar: SeekBar?) {}
+        })
+    }
+
+    private fun setTorch(level: Int) {
+        try {
+            cameraManager.turnOnTorchWithStrengthLevel(cameraId!!, level)
+        } catch (e: Exception) {
+            cameraManager.setTorchMode(cameraId!!, true)
+        }
+    }
+}
